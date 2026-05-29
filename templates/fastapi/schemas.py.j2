@@ -1,0 +1,23 @@
+"""Pydantic I/O schemas for billing endpoints. No business logic."""
+
+from pydantic import BaseModel, HttpUrl
+
+
+class CheckoutRequest(BaseModel):
+    price_id: str
+    success_url: str
+    cancel_url: str
+    customer_id: str | None = None  # Existing Stripe customer ID, if known
+
+
+class CheckoutResponse(BaseModel):
+    session_url: str
+
+
+class PortalRequest(BaseModel):
+    customer_id: str
+    return_url: str
+
+
+class PortalResponse(BaseModel):
+    portal_url: str

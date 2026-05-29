@@ -1,0 +1,40 @@
+# Pricing tier configuration. Rename to pricing-tiers.yaml and edit for your app.
+# scaffold.py reads this to provision Products and Prices in Stripe.
+# Tiers are idempotent: re-running provision_stripe.py finds existing objects by app_sku.
+app_name: "my-saas-app"
+
+billing_model: subscription   # one_time | subscription | tiered | usage
+
+tiers:
+  - name: starter
+    app_sku: starter             # Unique ID — used for idempotent Stripe metadata lookup
+    display_name: "Starter"
+    amount: 999                  # In smallest currency unit (cents for USD)
+    currency: usd
+    interval: month              # month | year (ignored for one_time)
+    interval_count: 1
+    trial_days: 14               # 0 = no trial
+
+  - name: pro
+    app_sku: pro
+    display_name: "Pro"
+    amount: 2999
+    currency: usd
+    interval: month
+    interval_count: 1
+    trial_days: 0
+
+  - name: enterprise
+    app_sku: enterprise
+    display_name: "Enterprise"
+    amount: 9999
+    currency: usd
+    interval: month
+    interval_count: 1
+    trial_days: 0
+
+# Webhook endpoint to register in Stripe (set to your public URL in production)
+webhook_url: "https://your-domain.com/webhooks/stripe"
+
+# Optional: annual discount pricing (duplicates tiers with yearly billing)
+# annual_discount_percent: 20

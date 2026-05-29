@@ -1,0 +1,103 @@
+"""
+Test configuration for Stripe billing tests.
+
+Overrides get_stripe_client() and get_billing_service() to point at stripe-mock
+so tests hit a real HTTP server without touching production Stripe.
+
+Start stripe-mock before running tests:
+  docker compose -f docker-compose.stripe-mock.yml up -d
+"""
+
+import os
+
+import pytest
+import pytest_asyncio
+import stripe
+from fastapi.testclient import TestClient
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from billing.dependencies import get_stripe_client, get_billing_service, get_db
+from billing.models import Base
+from billing.services.billing_service import BillingService
+from main import app  # Replace with your FastAPI app import path
+
+STRIPE_MOCK_HOST = os.environ.get("STRIPE_MOCK_HOST", "http://localhost:12111")
+TEST_DB_URL = os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+
+
+# --- stripe-mock Stripe client ---
+
+@pytest.fixture(scope="session")
+def stripe_mock_client() -> stripe.Stripe:
+    client = stripe.Stripe("sk_test_xxx")  # stripe-mock accepts any key
+    client.api_base = STRIPE_MOCK_HOST
+    client.api_version = "{{ stripe_api_version | default('2026-04-22.dahlia') }}"
+    return client
+
+
+# --- In-memory database ---
+
+@pytest_asyncio.fixture(scope="function")
+async def db_session():
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with async_session() as session:
+        yield session
+        await session.rollback()  # Isolation per test
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+# --- DI overrides ---
+
+@pytest_asyncio.fixture(scope="function")
+async def client(stripe_mock_client, db_session):
+    """AsyncClient with DI overrides pointing at stripe-mock and in-memory DB."""
+    app.dependency_overrides[get_stripe_client] = lambda: stripe_mock_client
+    app.dependency_overrides[get_billing_service] = lambda: BillingService(stripe_mock_client)
+    app.dependency_overrides[get_db] = lambda: db_session
+
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
+
+# --- Stripe webhook signature helper ---
+
+@pytest.fixture
+def make_webhook_payload():
+    """
+    Returns a factory that builds a signed Stripe webhook payload + headers.
+    Uses a fixed test secret consistent with stripe-mock.
+    """
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    test_secret = "whsec_test_secret"  # Use this in STRIPE_WEBHOOK_SECRET_TEST for tests.
+
+    def _make(event_type: str, data: dict, secret: str = test_secret) -> tuple[bytes, dict]:
+        payload = json.dumps({
+            "id": f"evt_test_{event_type.replace('.', '_')}",
+            "object": "event",
+            "type": event_type,
+            "data": {"object": data},
+            "livemode": False,
+        }).encode()
+        timestamp = str(int(time.time()))
+        signed_payload = f"{timestamp}.{payload.decode()}"
+        signature = hmac.new(secret.encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
+        return payload, {
+            "stripe-signature": f"t={timestamp},v1={signature}",
+            "content-type": "application/json",
+        }
+
+    return _make

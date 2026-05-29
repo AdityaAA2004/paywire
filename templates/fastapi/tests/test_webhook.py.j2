@@ -1,0 +1,140 @@
+"""
+Webhook security and idempotency tests.
+
+These run against stripe-mock (see conftest.py).
+Start stripe-mock: docker compose -f docker-compose.stripe-mock.yml up -d
+"""
+
+import pytest
+
+
+# --- Security tests ---
+
+@pytest.mark.asyncio
+async def test_valid_signature_returns_200(client, make_webhook_payload):
+    payload, headers = make_webhook_payload(
+        "checkout.session.completed",
+        {"id": "cs_test_xxx", "mode": "subscription"},
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_missing_signature_returns_400(client, make_webhook_payload):
+    payload, _ = make_webhook_payload("checkout.session.completed", {"id": "cs_test_xxx"})
+    response = await client.post(
+        "/webhooks/stripe",
+        content=payload,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_tampered_signature_returns_400(client, make_webhook_payload):
+    payload, headers = make_webhook_payload("checkout.session.completed", {"id": "cs_test_xxx"})
+    headers["stripe-signature"] = headers["stripe-signature"] + "tampered"
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_wrong_secret_returns_400(client, make_webhook_payload):
+    payload, headers = make_webhook_payload(
+        "checkout.session.completed",
+        {"id": "cs_test_xxx"},
+        secret="whsec_wrong_secret",
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 400
+
+
+# --- Idempotency tests ---
+
+@pytest.mark.asyncio
+async def test_duplicate_event_returns_200_without_double_processing(
+    client, make_webhook_payload
+):
+    payload, headers = make_webhook_payload(
+        "invoice.paid",
+        {"id": "in_test_dup"},
+    )
+    # First delivery — should process.
+    r1 = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert r1.status_code == 200
+    assert r1.json()["status"] != "already_processed"
+
+    # Second delivery — same event_id — should be a no-op.
+    r2 = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "already_processed"
+
+
+# --- Handler dispatch tests ---
+
+@pytest.mark.asyncio
+async def test_checkout_completed_handler_is_dispatched(client, make_webhook_payload):
+    payload, headers = make_webhook_payload(
+        "checkout.session.completed",
+        {"id": "cs_test_dispatch", "mode": "subscription", "customer": "cus_test", "subscription": "sub_test"},
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 200
+
+    # LLM_SECTION_START
+    # Assert that the checkout handler's side effect happened in your app.
+    # Examples:
+    #   db_session.refresh(user)
+    #   assert user.subscription_status == "active"
+    # LLM_SECTION_END
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_extends_subscription(client, make_webhook_payload, db_session):
+    payload, headers = make_webhook_payload(
+        "invoice.paid",
+        {"id": "in_test_paid", "subscription": "sub_test_renew", "customer": "cus_test"},
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 200
+
+    # LLM_SECTION_START
+    # Assert that the subscription's current_period_end was extended.
+    # Example:
+    #   from billing.models import StripeSubscription
+    #   from sqlalchemy import select
+    #   result = await db_session.execute(
+    #       select(StripeSubscription).where(
+    #           StripeSubscription.stripe_subscription_id == "sub_test_renew"
+    #       )
+    #   )
+    #   sub = result.scalar_one_or_none()
+    #   assert sub is not None
+    #   assert sub.status == "active"
+    # LLM_SECTION_END
+
+
+@pytest.mark.asyncio
+async def test_subscription_deleted_cancels_access(client, make_webhook_payload, db_session):
+    payload, headers = make_webhook_payload(
+        "customer.subscription.deleted",
+        {"id": "sub_test_cancel", "customer": "cus_test", "status": "canceled"},
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    assert response.status_code == 200
+
+    # LLM_SECTION_START
+    # Assert that the subscription was marked canceled and access was revoked.
+    # LLM_SECTION_END
+
+
+@pytest.mark.asyncio
+async def test_unknown_event_type_returns_200(client, make_webhook_payload):
+    payload, headers = make_webhook_payload(
+        "some.unknown.event",
+        {"id": "obj_test"},
+    )
+    response = await client.post("/webhooks/stripe", content=payload, headers=headers)
+    # Unknown events should be silently ignored, not 404.
+    assert response.status_code == 200

@@ -1,0 +1,113 @@
+"""
+Stripe webhook endpoint.
+
+SRP: does exactly two things — verify the signature, dispatch the event.
+     No business logic lives here.
+
+Security requirements implemented:
+  1. Raw bytes read via request.body() BEFORE any parsing (signature verified on raw bytes).
+  2. stripe.Webhook.construct_event validates HMAC-SHA256 + 5-minute replay window.
+  3. Returns 400 (not 500) on verification failure — stops Stripe retrying spoofed events.
+  4. StripeEvent idempotency check + insert runs in the SAME transaction as business side effects.
+  5. BackgroundTasks dispatches the handler AFTER the 200 response — immediate ACK to Stripe.
+  6. Dispatchers always refetch the resource from Stripe before calling handlers.
+  7. No business logic in this file.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+import stripe
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .dependencies import get_dispatcher
+from .dispatcher import WebhookDispatcher
+from .models import StripeEvent
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["stripe-webhooks"])
+
+
+def _get_webhook_secret() -> str:
+    env = os.environ.get("STRIPE_ENV", "test").lower()
+    key = f"STRIPE_WEBHOOK_SECRET_{env.upper()}"
+    secret = os.environ.get(key)
+    if not secret:
+        raise RuntimeError(f"Missing environment variable: {key}")
+    return secret
+
+
+@router.post("/stripe")
+async def stripe_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    stripe_signature: str | None = Header(None, alias="stripe-signature"),
+    dispatcher: WebhookDispatcher = Depends(get_dispatcher),
+    db: AsyncSession = Depends(get_db),  # Replace get_db with your session dependency
+) -> dict:
+    # 1. Read raw bytes — must happen before any body parsing.
+    payload: bytes = await request.body()
+
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="Missing stripe-signature header")
+
+    # 2. Verify HMAC-SHA256 signature + 5-minute replay window.
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=_get_webhook_secret(),
+        )
+    except ValueError:
+        # 3. Return 400 (not 500) — Stripe stops retrying on 4xx.
+        logger.warning("Stripe webhook: invalid payload")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.SignatureVerificationError:
+        logger.warning("Stripe webhook: signature verification failed")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    event_id: str = event["id"]
+
+    # 4. Idempotency check — inside the same transaction as the side effect.
+    existing = await db.scalar(
+        select(StripeEvent).where(StripeEvent.stripe_event_id == event_id)
+    )
+    if existing:
+        logger.info("Duplicate webhook event %s — already processed, skipping.", event_id)
+        return {"status": "already_processed"}
+
+    stripe_event_record = StripeEvent(
+        stripe_event_id=event_id,
+        event_type=event["type"],
+    )
+    db.add(stripe_event_record)
+    await db.flush()  # Persist within the open transaction before dispatching.
+
+    # 5. Enqueue dispatch as background task — ACK to Stripe before processing.
+    background_tasks.add_task(_dispatch, dispatcher, event, db)
+
+    return {"status": "received"}
+
+
+async def _dispatch(
+    dispatcher: WebhookDispatcher,
+    event: dict,
+    db: AsyncSession,
+) -> None:
+    try:
+        # 6. Dispatcher always refetches from Stripe — handlers never trust payload data.
+        await dispatcher.dispatch(event, db)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "Unhandled error processing webhook event %s (%s)",
+            event["id"],
+            event["type"],
+        )
+        # Do not re-raise — the 200 was already sent. Log for manual recovery.

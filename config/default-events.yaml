@@ -1,0 +1,51 @@
+# Stripe webhook event → handler matrix.
+# Set enabled: true for events your app needs to act on.
+# These map to generated handler classes in billing/handlers/.
+events:
+  - name: checkout.session.completed
+    enabled: true
+    handler_class: CheckoutCompletedHandler
+    handler_module: checkout_handler
+    description: "Customer completed a checkout session. Provision access or create subscription record."
+    resource: checkout.Session
+    resource_retrieve: "stripe.checkout.Session.retrieve"
+
+  - name: invoice.paid
+    enabled: true
+    handler_class: InvoicePaidHandler
+    handler_module: invoice_handler
+    description: "Subscription invoice paid (initial or renewal). Extend or activate access."
+    resource: Invoice
+    resource_retrieve: "stripe.Invoice.retrieve"
+
+  - name: invoice.payment_failed
+    enabled: true
+    handler_class: InvoicePaymentFailedHandler
+    handler_module: invoice_handler
+    description: "Subscription payment failed. Begin dunning / grace period logic."
+    resource: Invoice
+    resource_retrieve: "stripe.Invoice.retrieve"
+
+  - name: customer.subscription.deleted
+    enabled: true
+    handler_class: SubscriptionDeletedHandler
+    handler_module: subscription_handler
+    description: "Subscription cancelled or expired. Revoke access."
+    resource: Subscription
+    resource_retrieve: "stripe.Subscription.retrieve"
+
+  - name: customer.subscription.updated
+    enabled: false
+    handler_class: SubscriptionUpdatedHandler
+    handler_module: subscription_handler
+    description: "Plan or quantity changed. Update entitlements."
+    resource: Subscription
+    resource_retrieve: "stripe.Subscription.retrieve"
+
+  - name: customer.subscription.trial_will_end
+    enabled: false
+    handler_class: TrialWillEndHandler
+    handler_module: subscription_handler
+    description: "Trial ending in 3 days. Send conversion nudge."
+    resource: Subscription
+    resource_retrieve: "stripe.Subscription.retrieve"

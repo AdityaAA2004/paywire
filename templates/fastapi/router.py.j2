@@ -1,0 +1,64 @@
+"""
+Billing routes — checkout session creation and customer portal redirect.
+
+SRP: route definitions only; no business logic, no Stripe SDK calls.
+DIP: delegates to BillingService via FastAPI's dependency injection.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
+
+from .dependencies import get_billing_service
+from .schemas import CheckoutRequest, CheckoutResponse, PortalRequest, PortalResponse
+from .services.billing_service import StripeCheckoutProtocol
+
+router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+@router.post("/checkout", response_model=CheckoutResponse)
+async def create_checkout_session(
+    body: CheckoutRequest,
+    billing: StripeCheckoutProtocol = Depends(get_billing_service),
+) -> CheckoutResponse:
+    """
+    Create a Stripe Checkout Session and return the hosted URL.
+
+    The client should redirect the user to session_url.
+    On success, Stripe redirects to success_url; on cancel, to cancel_url.
+    """
+    try:
+        session_url = await billing.create_checkout_session(
+            price_id=body.price_id,
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
+            customer_id=body.customer_id,
+            trial_days={{ trial_days | default(0) }},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to create checkout session") from exc
+
+    return CheckoutResponse(session_url=session_url)
+
+
+@router.post("/portal", response_model=PortalResponse)
+async def create_portal_session(
+    body: PortalRequest,
+    billing: StripeCheckoutProtocol = Depends(get_billing_service),
+) -> PortalResponse:
+    """
+    Create a Stripe Billing Portal session and return the URL.
+
+    The client should redirect the user to portal_url.
+    The portal handles subscription management, payment method updates, and cancellation.
+    """
+    try:
+        portal_url = await billing.create_portal_session(
+            customer_id=body.customer_id,
+            return_url=body.return_url,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to create portal session") from exc
+
+    return PortalResponse(portal_url=portal_url)

@@ -1,0 +1,94 @@
+"""
+Subscription lifecycle event handlers.
+
+SRP: each class handles one subscription event type.
+DIP: depends on StripeSubscriptionProtocol, not BillingService directly.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .base import HandlerError
+from ..services.billing_service import StripeSubscriptionProtocol
+from ..services.subscription_service import SubscriptionService
+
+
+class SubscriptionDeletedHandler:
+    event_type = "customer.subscription.deleted"
+
+    def __init__(
+        self,
+        stripe_svc: StripeSubscriptionProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._stripe_svc = stripe_svc
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        # Refetch from Stripe for canonical data.
+        subscription = await self._stripe_svc.retrieve_subscription(event_object["id"])
+        await self._subscription_svc.cancel_subscription(
+            stripe_subscription_id=subscription["id"],
+            db=db,
+        )
+
+
+{% if "customer.subscription.updated" in selected_event_names %}
+class SubscriptionUpdatedHandler:
+    event_type = "customer.subscription.updated"
+
+    def __init__(
+        self,
+        stripe_svc: StripeSubscriptionProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._stripe_svc = stripe_svc
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        subscription = await self._stripe_svc.retrieve_subscription(event_object["id"])
+
+        # LLM_SECTION_START
+        # customer.subscription.updated fires on every field change:
+        #   - Plan upgrade / downgrade
+        #   - Quantity change
+        #   - Trial-to-active transition
+        #   - cancel_at_period_end toggled
+        #
+        # Decide what your app needs to do. Usually: sync the local subscription record.
+        # Example:
+        #   await self._subscription_svc.renew_subscription(
+        #       stripe_subscription_id=subscription["id"],
+        #       stripe_price_id=subscription["items"]["data"][0]["price"]["id"],
+        #       current_period_end=datetime.fromtimestamp(
+        #           subscription["current_period_end"], tz=timezone.utc
+        #       ),
+        #       db=db,
+        #   )
+        # LLM_SECTION_END
+{% endif %}
+
+
+{% if "customer.subscription.trial_will_end" in selected_event_names %}
+class TrialWillEndHandler:
+    event_type = "customer.subscription.trial_will_end"
+
+    def __init__(
+        self,
+        stripe_svc: StripeSubscriptionProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._stripe_svc = stripe_svc
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        subscription = await self._stripe_svc.retrieve_subscription(event_object["id"])
+
+        # LLM_SECTION_START
+        # Trial ends in 3 days. Typical actions:
+        #   - Send a "your trial is ending soon" email with a CTA to add a payment method
+        #   - Log a conversion event to your analytics service
+        # subscription["trial_end"] contains the Unix timestamp when the trial ends.
+        # LLM_SECTION_END
+{% endif %}

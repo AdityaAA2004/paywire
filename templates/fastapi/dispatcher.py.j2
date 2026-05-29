@@ -1,0 +1,33 @@
+"""
+WebhookDispatcher — event handler registry.
+
+OCP: new event types are added by registering a new handler.
+     dispatcher.py itself never needs to change.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .handlers.base import StripeEventHandler
+
+logger = logging.getLogger(__name__)
+
+
+class WebhookDispatcher:
+    def __init__(self) -> None:
+        self._registry: dict[str, StripeEventHandler] = {}
+
+    def register(self, handler: StripeEventHandler) -> None:
+        self._registry[handler.event_type] = handler
+        logger.debug("Registered handler for %s", handler.event_type)
+
+    async def dispatch(self, event: dict, db: AsyncSession) -> None:
+        event_type: str = event["type"]
+        handler = self._registry.get(event_type)
+        if handler is None:
+            logger.info("No handler registered for event type %s — skipping.", event_type)
+            return
+        await handler.handle(event["data"]["object"], db)

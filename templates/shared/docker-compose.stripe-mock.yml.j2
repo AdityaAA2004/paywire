@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  stripe-mock:
+    image: stripe/stripe-mock:latest
+    ports:
+      - "12111:12111"   # HTTP
+      - "12112:12112"   # HTTPS (self-signed cert)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:12111/v1/charges"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+# Usage:
+#   docker compose -f docker-compose.stripe-mock.yml up -d
+#
+# Then set in your test environment:
+#   STRIPE_MOCK_HOST=http://localhost:12111
+#
+# conftest.py overrides get_stripe_client() to point at stripe-mock automatically.
+# stripe-mock accepts any API key value — use "sk_test_xxx" for the format.

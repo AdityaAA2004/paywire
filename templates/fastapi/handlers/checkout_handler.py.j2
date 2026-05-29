@@ -1,0 +1,66 @@
+"""
+CheckoutCompletedHandler — processes checkout.session.completed events.
+
+SRP: handles exactly one event type.
+DIP: depends on StripeCheckoutProtocol and StripeSubscriptionProtocol, not BillingService.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .base import HandlerError
+from ..services.billing_service import StripeCheckoutProtocol, StripeSubscriptionProtocol
+from ..services.subscription_service import SubscriptionService
+
+
+class CheckoutCompletedHandler:
+    event_type = "checkout.session.completed"
+
+    def __init__(
+        self,
+        checkout: StripeCheckoutProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._checkout = checkout
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        # Refetch from Stripe — never trust the raw webhook payload.
+        session = await self._checkout.retrieve_checkout_session(event_object["id"])
+
+        if session.get("mode") != "subscription":
+            return  # One-time payment — handle separately if needed.
+
+        stripe_customer_id: str = session["customer"]
+        stripe_subscription_id: str = session["subscription"]
+
+        # LLM_SECTION_START
+        # When checkout completes, we need to:
+        #   1. Resolve the app user from the Stripe customer ID.
+        #   2. Create or activate a StripeSubscription record.
+        #
+        # How does your app associate a Stripe customer ID with a user?
+        # Options:
+        #   A) session["client_reference_id"] = your user's ID (set when creating the session)
+        #   B) session["metadata"]["user_id"] = your user's ID
+        #   C) Look up StripeCustomer by stripe_customer_id (if already created via API)
+        #
+        # Example using client_reference_id (option A):
+        #   user_id = int(session["client_reference_id"])
+        #   customer = await self._subscription_svc.find_or_create_customer(
+        #       stripe_customer_id=stripe_customer_id, user_id=user_id, db=db
+        #   )
+        #   subscription_data = ...retrieve subscription from stripe...
+        #   await self._subscription_svc.activate_subscription(
+        #       customer=customer,
+        #       stripe_subscription_id=stripe_subscription_id,
+        #       stripe_price_id=subscription_data["items"]["data"][0]["price"]["id"],
+        #       current_period_end=datetime.fromtimestamp(
+        #           subscription_data["current_period_end"], tz=timezone.utc
+        #       ),
+        #       db=db,
+        #   )
+        # LLM_SECTION_END

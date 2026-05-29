@@ -1,0 +1,94 @@
+"""
+Invoice event handlers.
+
+SRP: InvoicePaidHandler handles invoice.paid; InvoicePaymentFailedHandler handles invoice.payment_failed.
+DIP: depends on StripeSubscriptionProtocol, not BillingService directly.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .base import HandlerError
+from ..services.billing_service import StripeSubscriptionProtocol
+from ..services.subscription_service import SubscriptionService
+
+
+class InvoicePaidHandler:
+    event_type = "invoice.paid"
+
+    def __init__(
+        self,
+        stripe_svc: StripeSubscriptionProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._stripe_svc = stripe_svc
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        # Refetch from Stripe — never trust the raw webhook payload.
+        invoice = await self._stripe_svc.retrieve_invoice(event_object["id"])
+
+        subscription_id: str | None = invoice.get("subscription")
+        if not subscription_id:
+            return  # One-time invoice — not a subscription lifecycle event.
+
+        # Retrieve current subscription state for fresh period data.
+        subscription = await self._stripe_svc.retrieve_subscription(subscription_id)
+        current_period_end = datetime.fromtimestamp(
+            subscription["current_period_end"], tz=timezone.utc
+        )
+        price_id: str = subscription["items"]["data"][0]["price"]["id"]
+
+        # LLM_SECTION_START
+        # invoice.paid fires for both initial activation and renewals.
+        # Decide which service method to call based on your app's needs:
+        #
+        # For a new subscription (amount_paid may be 0 for trials):
+        #   await self._subscription_svc.activate_subscription(...)
+        #
+        # For a renewal:
+        #   await self._subscription_svc.renew_subscription(
+        #       stripe_subscription_id=subscription_id,
+        #       stripe_price_id=price_id,
+        #       current_period_end=current_period_end,
+        #       db=db,
+        #   )
+        #
+        # If you want to handle both cases uniformly, activate_subscription is safe
+        # to call on renewals too (it upserts the record).
+        # LLM_SECTION_END
+
+
+class InvoicePaymentFailedHandler:
+    event_type = "invoice.payment_failed"
+
+    def __init__(
+        self,
+        stripe_svc: StripeSubscriptionProtocol,
+        subscription_svc: SubscriptionService,
+    ) -> None:
+        self._stripe_svc = stripe_svc
+        self._subscription_svc = subscription_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        invoice = await self._stripe_svc.retrieve_invoice(event_object["id"])
+
+        subscription_id: str | None = invoice.get("subscription")
+        if not subscription_id:
+            return
+
+        next_attempt_ts: int | None = invoice.get("next_payment_attempt")
+        next_attempt = (
+            datetime.fromtimestamp(next_attempt_ts, tz=timezone.utc)
+            if next_attempt_ts
+            else None
+        )
+
+        await self._subscription_svc.handle_payment_failure(
+            stripe_subscription_id=subscription_id,
+            next_payment_attempt=next_attempt,
+            db=db,
+        )

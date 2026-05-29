@@ -1,0 +1,58 @@
+"""
+FastAPI dependency providers — the DI wiring layer.
+
+DIP: callers depend on protocols (abstractions), not concrete implementations.
+     Swap BillingService for a mock in tests by overriding these providers.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+
+import stripe
+from fastapi import Depends
+
+from .services.billing_service import BillingService, StripeCheckoutProtocol, StripeSubscriptionProtocol
+from .services.subscription_service import SubscriptionService
+from .handlers.checkout_handler import CheckoutCompletedHandler
+from .handlers.invoice_handler import InvoicePaidHandler, InvoicePaymentFailedHandler
+from .handlers.subscription_handler import SubscriptionDeletedHandler{% if "customer.subscription.updated" in selected_event_names %}, SubscriptionUpdatedHandler{% endif %}{% if "customer.subscription.trial_will_end" in selected_event_names %}, TrialWillEndHandler{% endif %}
+
+from .dispatcher import WebhookDispatcher
+
+
+@lru_cache
+def get_stripe_client() -> stripe.Stripe:
+    key = os.environ["STRIPE_RESTRICTED_KEY"]
+    client = stripe.Stripe(key)
+    client.api_version = "{{ stripe_api_version | default('2026-04-22.dahlia') }}"
+    return client
+
+
+def get_billing_service(
+    client: stripe.Stripe = Depends(get_stripe_client),
+) -> BillingService:
+    return BillingService(client)
+
+
+def get_subscription_service() -> SubscriptionService:
+    return SubscriptionService()
+
+
+def get_dispatcher(
+    billing: BillingService = Depends(get_billing_service),
+    subscription_svc: SubscriptionService = Depends(get_subscription_service),
+) -> WebhookDispatcher:
+    dispatcher = WebhookDispatcher()
+    dispatcher.register(CheckoutCompletedHandler(checkout=billing, subscription_svc=subscription_svc))
+    dispatcher.register(InvoicePaidHandler(stripe_svc=billing, subscription_svc=subscription_svc))
+    dispatcher.register(InvoicePaymentFailedHandler(stripe_svc=billing, subscription_svc=subscription_svc))
+    dispatcher.register(SubscriptionDeletedHandler(stripe_svc=billing, subscription_svc=subscription_svc))
+    {% if "customer.subscription.updated" in selected_event_names %}
+    dispatcher.register(SubscriptionUpdatedHandler(stripe_svc=billing, subscription_svc=subscription_svc))
+    {% endif %}
+    {% if "customer.subscription.trial_will_end" in selected_event_names %}
+    dispatcher.register(TrialWillEndHandler(stripe_svc=billing, subscription_svc=subscription_svc))
+    {% endif %}
+    return dispatcher

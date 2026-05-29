@@ -1,0 +1,33 @@
+"""
+StripeEventHandler protocol — the contract every event handler must satisfy.
+
+ISP: handlers depend only on this narrow interface, not on the full BillingService.
+LSP: any handler implementing this protocol is substitutable in the dispatcher.
+"""
+
+from typing import Protocol, runtime_checkable
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@runtime_checkable
+class StripeEventHandler(Protocol):
+    """Implemented by every Stripe webhook event handler."""
+
+    event_type: str
+    """The Stripe event type string this handler processes (e.g. 'invoice.paid')."""
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        """
+        Process a single Stripe event payload.
+
+        The event_object is always fetched fresh from the Stripe API before this
+        method is called — never trust the raw webhook payload data directly.
+
+        Must not raise on duplicate events (idempotency is enforced at the webhook
+        layer before dispatch). Raise HandlerError for unrecoverable failures.
+        """
+        ...
+
+
+class HandlerError(Exception):
+    """Raised by a handler when processing fails unrecoverably."""

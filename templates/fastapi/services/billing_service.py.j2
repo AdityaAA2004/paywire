@@ -1,0 +1,92 @@
+"""
+BillingService — the single place in the codebase that calls the Stripe SDK.
+
+DIP: accepts a stripe.Stripe client via constructor injection.
+SRP: only wraps Stripe API calls; no app-side state changes.
+ISP: exposes two narrower protocols (StripeCheckoutProtocol, StripeSubscriptionProtocol)
+     so handlers depend only on the slice they need.
+"""
+
+from __future__ import annotations
+
+import stripe
+from typing import Protocol
+
+
+# --- Protocols (narrow interfaces for DIP) ---
+
+class StripeCheckoutProtocol(Protocol):
+    async def create_checkout_session(
+        self,
+        price_id: str,
+        success_url: str,
+        cancel_url: str,
+        customer_id: str | None,
+        trial_days: int,
+    ) -> str: ...
+
+    async def create_portal_session(self, customer_id: str, return_url: str) -> str: ...
+
+    async def retrieve_checkout_session(self, session_id: str) -> dict: ...
+
+
+class StripeSubscriptionProtocol(Protocol):
+    async def retrieve_subscription(self, subscription_id: str) -> dict: ...
+    async def retrieve_invoice(self, invoice_id: str) -> dict: ...
+    async def retrieve_customer(self, customer_id: str) -> dict: ...
+
+
+# --- Concrete implementation ---
+
+class BillingService:
+    """Implements both checkout and subscription protocols."""
+
+    def __init__(self, client: stripe.Stripe) -> None:
+        self._client = client
+
+    # --- Checkout ---
+
+    async def create_checkout_session(
+        self,
+        price_id: str,
+        success_url: str,
+        cancel_url: str,
+        customer_id: str | None = None,
+        trial_days: int = {{ trial_days | default(0) }},
+    ) -> str:
+        params: dict = {
+            "mode": "subscription",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            # Do NOT pass payment_method_types — let Stripe Dashboard control which methods appear.
+        }
+        if customer_id:
+            params["customer"] = customer_id
+        {% if trial_days > 0 %}
+        if not customer_id:  # Only apply trial for new customers
+            params["subscription_data"] = {"trial_period_days": {{ trial_days }}}
+        {% endif %}
+        session = self._client.checkout.sessions.create(**params)
+        return session.url
+
+    async def create_portal_session(self, customer_id: str, return_url: str) -> str:
+        session = self._client.billing_portal.sessions.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+        return session.url
+
+    async def retrieve_checkout_session(self, session_id: str) -> dict:
+        return self._client.checkout.sessions.retrieve(session_id)
+
+    # --- Subscriptions ---
+
+    async def retrieve_subscription(self, subscription_id: str) -> dict:
+        return self._client.subscriptions.retrieve(subscription_id)
+
+    async def retrieve_invoice(self, invoice_id: str) -> dict:
+        return self._client.invoices.retrieve(invoice_id)
+
+    async def retrieve_customer(self, customer_id: str) -> dict:
+        return self._client.customers.retrieve(customer_id)

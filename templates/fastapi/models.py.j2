@@ -1,0 +1,86 @@
+"""
+SQLAlchemy models for Stripe billing integration.
+Data definitions only — no business logic, no Stripe SDK calls.
+"""
+
+from datetime import datetime
+from sqlalchemy import String, Integer, DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class StripeEvent(Base):
+    """Idempotency table — prevents duplicate webhook processing."""
+
+    __tablename__ = "stripe_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    stripe_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("stripe_event_id", name="uq_stripe_events_id"),)
+
+
+class StripeCustomer(Base):
+    """Maps an app user to their Stripe customer record."""
+
+    __tablename__ = "stripe_customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    stripe_customer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    subscriptions: Mapped[list["StripeSubscription"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_stripe_customers_user"),
+        UniqueConstraint("stripe_customer_id", name="uq_stripe_customers_stripe"),
+    )
+
+
+class StripeSubscription(Base):
+    """Tracks the current state of a Stripe subscription."""
+
+    __tablename__ = "stripe_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("stripe_customers.id", ondelete="CASCADE"), nullable=False
+    )
+    stripe_subscription_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    stripe_price_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)  # active | trialing | past_due | canceled
+    current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    customer: Mapped["StripeCustomer"] = relationship(back_populates="subscriptions")
+
+    # LLM_SECTION_START
+    # Add app-specific columns here.
+    # Examples:
+    #   tier: Mapped[str] = mapped_column(String(50), nullable=True)  # starter | pro | enterprise
+    #   seats: Mapped[int] = mapped_column(Integer, default=1)
+    #   trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # LLM_SECTION_END
+
+    __table_args__ = (
+        UniqueConstraint("stripe_subscription_id", name="uq_stripe_subscriptions_stripe"),
+    )

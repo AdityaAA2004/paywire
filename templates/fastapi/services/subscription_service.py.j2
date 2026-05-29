@@ -1,0 +1,162 @@
+"""
+SubscriptionService — app-side subscription state management.
+
+SRP: owns all app-side subscription changes; never calls Stripe directly.
+DIP: receives data (already fetched from Stripe) from handlers.
+
+LLM sections in this file are filled interactively by Claude Code based on
+your answers to questions about what should happen in your app for each event.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..models import StripeCustomer, StripeSubscription
+
+
+class SubscriptionService:
+
+    async def find_or_create_customer(
+        self,
+        stripe_customer_id: str,
+        user_id: int,
+        db: AsyncSession,
+    ) -> StripeCustomer:
+        result = await db.execute(
+            select(StripeCustomer).where(
+                StripeCustomer.stripe_customer_id == stripe_customer_id
+            )
+        )
+        customer = result.scalar_one_or_none()
+        if customer is None:
+            customer = StripeCustomer(
+                user_id=user_id,
+                stripe_customer_id=stripe_customer_id,
+            )
+            db.add(customer)
+            await db.flush()
+        return customer
+
+    async def activate_subscription(
+        self,
+        customer: StripeCustomer,
+        stripe_subscription_id: str,
+        stripe_price_id: str,
+        current_period_end: datetime,
+        db: AsyncSession,
+    ) -> None:
+        """Called when checkout completes or invoice.paid fires for a new subscription."""
+        result = await db.execute(
+            select(StripeSubscription).where(
+                StripeSubscription.stripe_subscription_id == stripe_subscription_id
+            )
+        )
+        subscription = result.scalar_one_or_none()
+        if subscription is None:
+            subscription = StripeSubscription(
+                customer_id=customer.id,
+                stripe_subscription_id=stripe_subscription_id,
+                stripe_price_id=stripe_price_id,
+                status="active",
+                current_period_end=current_period_end,
+            )
+            db.add(subscription)
+        else:
+            subscription.status = "active"
+            subscription.stripe_price_id = stripe_price_id
+            subscription.current_period_end = current_period_end
+
+        # LLM_SECTION_START
+        # What else should happen in your app when a subscription is activated or renewed?
+        # Examples:
+        #   - Grant feature flags or permissions to the user
+        #   - Update a User.subscription_tier column
+        #   - Send a welcome / renewal email via your email service
+        #   - Log a billing event to your analytics service
+        # LLM_SECTION_END
+
+    async def renew_subscription(
+        self,
+        stripe_subscription_id: str,
+        stripe_price_id: str,
+        current_period_end: datetime,
+        db: AsyncSession,
+    ) -> None:
+        """Called when invoice.paid fires for an existing subscription renewal."""
+        result = await db.execute(
+            select(StripeSubscription).where(
+                StripeSubscription.stripe_subscription_id == stripe_subscription_id
+            )
+        )
+        subscription = result.scalar_one_or_none()
+        if subscription is None:
+            return  # Subscription not tracked locally — ignore
+
+        subscription.status = "active"
+        subscription.stripe_price_id = stripe_price_id
+        subscription.current_period_end = current_period_end
+
+        # LLM_SECTION_START
+        # What should happen in your app when a subscription renews?
+        # Examples:
+        #   - Refresh the user's access period
+        #   - Send a renewal receipt email
+        # LLM_SECTION_END
+
+    async def handle_payment_failure(
+        self,
+        stripe_subscription_id: str,
+        next_payment_attempt: datetime | None,
+        db: AsyncSession,
+    ) -> None:
+        """Called when invoice.payment_failed fires."""
+        result = await db.execute(
+            select(StripeSubscription).where(
+                StripeSubscription.stripe_subscription_id == stripe_subscription_id
+            )
+        )
+        subscription = result.scalar_one_or_none()
+        if subscription is None:
+            return
+
+        subscription.status = "past_due"
+
+        # LLM_SECTION_START
+        # What should happen in your app when a payment fails?
+        # Consider: grace period length, access revocation timing, dunning emails.
+        # next_payment_attempt is the datetime of Stripe's next retry (or None if no more retries).
+        # Examples:
+        #   - Send a "payment failed — update your card" email
+        #   - Start a grace period (e.g., allow access for 72 hours before revoking)
+        #   - Downgrade the user to a free tier after max retries
+        # LLM_SECTION_END
+
+    async def cancel_subscription(
+        self,
+        stripe_subscription_id: str,
+        db: AsyncSession,
+    ) -> None:
+        """Called when customer.subscription.deleted fires."""
+        result = await db.execute(
+            select(StripeSubscription).where(
+                StripeSubscription.stripe_subscription_id == stripe_subscription_id
+            )
+        )
+        subscription = result.scalar_one_or_none()
+        if subscription is None:
+            return
+
+        subscription.status = "canceled"
+
+        # LLM_SECTION_START
+        # What should happen in your app when a subscription is cancelled?
+        # Examples:
+        #   - Revoke feature flags / permissions
+        #   - Reset User.subscription_tier to "free"
+        #   - Send a cancellation confirmation email
+        #   - Schedule a data retention / export job
+        # LLM_SECTION_END
