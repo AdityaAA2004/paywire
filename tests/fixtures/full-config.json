@@ -1,0 +1,87 @@
+{
+  "app_name": "testapp",
+  "pricing_model": "subscription",
+  "trial_days": 14,
+  "currencies": ["usd"],
+  "with_connect": false,
+  "stripe_api_version": "2026-04-22.dahlia",
+  "port": 8000,
+  "pricing_tiers": [
+    {
+      "name": "starter",
+      "app_sku": "starter",
+      "display_name": "Starter",
+      "amount": 999,
+      "currency": "usd",
+      "interval": "month",
+      "interval_count": 1,
+      "billing_model": "subscription"
+    },
+    {
+      "name": "pro",
+      "app_sku": "pro",
+      "display_name": "Pro",
+      "amount": 2999,
+      "currency": "usd",
+      "interval": "month",
+      "interval_count": 1,
+      "billing_model": "subscription"
+    }
+  ],
+  "events": [
+    {
+      "name": "checkout.session.completed",
+      "enabled": true,
+      "handler_module": "checkout_handler",
+      "handler_class": "CheckoutCompletedHandler",
+      "description": "Customer completed a checkout session.",
+      "resource": "checkout.Session",
+      "resource_retrieve": "stripe.checkout.Session.retrieve"
+    },
+    {
+      "name": "invoice.paid",
+      "enabled": true,
+      "handler_module": "invoice_handler",
+      "handler_class": "InvoicePaidHandler",
+      "description": "Subscription invoice paid (initial or renewal).",
+      "resource": "Invoice",
+      "resource_retrieve": "stripe.Invoice.retrieve"
+    },
+    {
+      "name": "invoice.payment_failed",
+      "enabled": true,
+      "handler_module": "invoice_handler",
+      "handler_class": "InvoicePaymentFailedHandler",
+      "description": "Subscription payment failed.",
+      "resource": "Invoice",
+      "resource_retrieve": "stripe.Invoice.retrieve"
+    },
+    {
+      "name": "customer.subscription.deleted",
+      "enabled": true,
+      "handler_module": "subscription_handler",
+      "handler_class": "SubscriptionDeletedHandler",
+      "description": "Subscription cancelled or expired.",
+      "resource": "Subscription",
+      "resource_retrieve": "stripe.Subscription.retrieve"
+    },
+    {
+      "name": "customer.subscription.updated",
+      "enabled": false,
+      "handler_module": "subscription_handler",
+      "handler_class": "SubscriptionUpdatedHandler",
+      "description": "Plan or quantity changed.",
+      "resource": "Subscription",
+      "resource_retrieve": "stripe.Subscription.retrieve"
+    },
+    {
+      "name": "customer.subscription.trial_will_end",
+      "enabled": false,
+      "handler_module": "subscription_handler",
+      "handler_class": "TrialWillEndHandler",
+      "description": "Trial ending in 3 days.",
+      "resource": "Subscription",
+      "resource_retrieve": "stripe.Subscription.retrieve"
+    }
+  ]
+}
