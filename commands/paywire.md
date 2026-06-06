@@ -70,10 +70,22 @@ Do NOT leave any `# LLM_SECTION_START` / `# LLM_SECTION_END` markers in the fina
 
 Ask: "Do you want to provision Stripe Products, Prices, and a webhook endpoint now? (Requires STRIPE_RESTRICTED_KEY in env)"
 
-If yes:
+If yes AND `STRIPE_RESTRICTED_KEY` is set in the environment:
 ```bash
 python3 .claude/skills/stripe-payments/scripts/provision_stripe.py \
   --config .claude/paywire-config.json
+```
+
+If yes BUT the key is not set, tell the user:
+```
+To provision Stripe resources, export your restricted key and run:
+
+  export STRIPE_RESTRICTED_KEY=rk_test_...
+  python3 .claude/skills/stripe-payments/scripts/provision_stripe.py \
+    --config .claude/paywire-config.json
+
+This creates Products, Prices, and a webhook endpoint in your Stripe account
+and writes the resulting IDs to .env.stripe for you to merge into .env.
 ```
 
 ## Step 7 — Verify
@@ -84,28 +96,57 @@ python3 .claude/skills/stripe-payments/scripts/verify_setup.py
 
 Show the user the pass/fail checklist.
 
-## Step 8 — Done
+## Step 8 — Wire app
 
-Print:
+Run the wiring script to mount routers, update requirements, and copy the env template:
+
+```bash
+python3 .claude/skills/stripe-payments/scripts/wire_app.py
 ```
-Stripe billing scaffolded. Next steps:
 
-1. Mount the routers in your FastAPI app:
-   from billing.router import router as billing_router
-   from billing.webhook import router as webhook_router
-   app.include_router(billing_router, prefix="/billing")
-   app.include_router(webhook_router, prefix="/webhooks")
+This script is idempotent — safe to re-run. It will:
+- Insert `billing_router` and `webhook_router` includes into the detected FastAPI entry point
+- Append `stripe>=11.0` to `requirements.txt`
+- Copy `billing/env.example` to `.env` (only if `.env` does not already exist)
 
-2. Run Alembic migration:
-   alembic revision --autogenerate -m "add stripe billing tables"
-   alembic upgrade head
+If auto-detection fails (no `main.py` / `app.py` found), re-run with an explicit path:
+```bash
+python3 .claude/skills/stripe-payments/scripts/wire_app.py --app-file src/your_app.py
+```
 
-3. Forward webhooks locally:
-   stripe listen --forward-to localhost:8000/webhooks/stripe
-   (copy the whsec_... to STRIPE_WEBHOOK_SECRET_TEST in .env)
+## Step 9 — Run Alembic migration
 
-4. Trigger a test event:
-   stripe trigger checkout.session.completed
+If `alembic.ini` exists in the project root, run the migration:
+
+```bash
+if [ -f alembic.ini ]; then
+  alembic revision --autogenerate -m "add stripe billing tables"
+  alembic upgrade head
+fi
+```
+
+If Alembic is not yet initialised, tell the user:
+```
+Alembic is not initialised. To create the billing tables, run:
+
+  alembic init alembic          # one-time setup
+  # edit alembic/env.py to point at your SQLAlchemy Base
+  alembic revision --autogenerate -m "add stripe billing tables"
+  alembic upgrade head
+```
+
+## Step 10 — Done
+
+Tell the user:
+```
+Billing wired. One manual step remains before local testing:
+
+  stripe listen --forward-to localhost:8000/webhooks/stripe
+
+Copy the whsec_... printed on startup to STRIPE_WEBHOOK_SECRET_TEST in .env,
+then verify the integration end-to-end:
+
+  stripe trigger checkout.session.completed
 ```
 
 ## Security rules — never override

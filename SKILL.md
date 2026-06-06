@@ -111,13 +111,14 @@ Do NOT leave any `# LLM_SECTION_START` / `# LLM_SECTION_END` markers in output f
 
 Ask: "Provision Stripe Products/Prices/WebhookEndpoint now? (Needs STRIPE_RESTRICTED_KEY)"
 
-If yes:
+If yes AND `STRIPE_RESTRICTED_KEY` is set:
 ```bash
 python3 .claude/skills/stripe-payments/scripts/provision_stripe.py \
   --config .claude/paywire-config.json
 ```
 
-Outputs `.env.stripe` with created IDs.
+Outputs `.env.stripe` with created IDs. If the key is not set, print the exact
+`export STRIPE_RESTRICTED_KEY=rk_test_...` + command so the user can run it later.
 
 ### Step 7 — Generate test fixtures
 
@@ -136,13 +137,35 @@ Show pass/fail checklist. If stripe-mock is not running, suggest:
 docker compose -f billing/docker-compose.stripe-mock.yml up -d
 ```
 
-### Step 9 — Done
+### Step 9 — Wire app
 
-Tell the user:
-- Mount `billing.router` and `billing.webhook` routers in their FastAPI app
-- Run Alembic to create the billing tables
-- Run `stripe listen --forward-to localhost:8000/webhooks/stripe` for local webhook forwarding
-- Trigger a test: `stripe trigger checkout.session.completed`
+```bash
+python3 .claude/skills/stripe-payments/scripts/wire_app.py
+```
+
+Idempotent. Inserts router includes into the FastAPI entry point, appends `stripe>=11.0`
+to `requirements.txt`, and copies `billing/env.example` to `.env` if it does not exist.
+If auto-detection fails, re-run with `--app-file <path>`.
+
+### Step 10 — Run Alembic migration
+
+```bash
+if [ -f alembic.ini ]; then
+  alembic revision --autogenerate -m "add stripe billing tables"
+  alembic upgrade head
+fi
+```
+
+If `alembic.ini` is absent, print setup instructions (see `commands/paywire.md` Step 9).
+
+### Step 11 — Done
+
+Tell the user the one remaining manual step:
+```
+stripe listen --forward-to localhost:8000/webhooks/stripe
+# Copy whsec_... → STRIPE_WEBHOOK_SECRET_TEST in .env
+stripe trigger checkout.session.completed
+```
 
 ---
 
