@@ -1,0 +1,71 @@
+"""
+Generic event handler stub — generated for events that have no dedicated paywire template.
+
+This file is generated once per event group that has has_template: false in default-events.yaml.
+Claude Code fills the LLM_SECTION with the correct business logic for your app.
+
+To add another event to this handler: add a new class following the same pattern and
+register it in dependencies.py. No changes needed to webhook.py or dispatcher.py (OCP).
+"""
+
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .base import HandlerError
+from ..services.billing_service import StripeSubscriptionProtocol
+
+logger = logging.getLogger(__name__)
+
+{#
+  Mapping: default-events.yaml resource_retrieve value → BillingService protocol method.
+  All entries here correspond to methods on StripeSubscriptionProtocol / BillingService.
+  If you add a new event type with a resource not listed, add a retrieve_* method to
+  billing_service.py and extend this map.
+#}
+{% set RETRIEVE_METHOD = {
+    "stripe.checkout.Session.retrieve": "retrieve_checkout_session",
+    "stripe.Invoice.retrieve": "retrieve_invoice",
+    "stripe.Subscription.retrieve": "retrieve_subscription",
+    "stripe.Customer.retrieve": "retrieve_customer",
+    "stripe.Charge.retrieve": "retrieve_charge",
+    "stripe.Dispute.retrieve": "retrieve_dispute",
+    "stripe.PaymentIntent.retrieve": "retrieve_payment_intent",
+} %}
+
+{% for handler in generic_handlers %}
+
+class {{ handler.handler_class }}:
+    event_type = "{{ handler.name }}"
+
+    def __init__(self, stripe_svc: StripeSubscriptionProtocol) -> None:
+        self._stripe_svc = stripe_svc
+
+    async def handle(self, event_object: dict, db: AsyncSession) -> None:
+        {% if handler.resource_retrieve %}
+        # Refetch from Stripe for canonical data — never trust the raw webhook payload.
+        resource = await self._stripe_svc.{{ RETRIEVE_METHOD[handler.resource_retrieve] }}(event_object["id"])
+        {% else %}
+        # Note: {{ handler.name }} — resource cannot be retrieved after the event (e.g. deleted).
+        # Use event_object data directly, but treat it as informational only.
+        resource = event_object
+        {% endif %}
+
+        # LLM_SECTION_START
+        # Event: {{ handler.name }}
+        # Description: {{ handler.description | trim }}
+        #
+        # resource contains the {{ handler.resource }} object fetched from Stripe.
+        # Add your app-specific logic here.
+        #
+        # Examples:
+        #   - Update a database record
+        #   - Send a notification email
+        #   - Emit an analytics event
+        #   - Flag an account for review
+        logger.info("Received {{ handler.name }} for %s — no handler logic implemented yet.", event_object.get("id"))
+        # LLM_SECTION_END
+
+{% endfor %}

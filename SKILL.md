@@ -66,12 +66,12 @@ Collect the following. Ask only for what wasn't answered in Step 2. Present all 
 
 ### Step 4 — Render templates
 
-Write config to `/tmp/paywire-config.json`, then:
+Write config to `.claude/paywire-config.json` (project-scoped — not /tmp), then:
 
 ```bash
 python3 .claude/skills/stripe-payments/scripts/scaffold.py \
   --framework <framework> \
-  --config /tmp/paywire-config.json \
+  --config .claude/paywire-config.json \
   --out ./billing
 ```
 
@@ -114,7 +114,7 @@ Ask: "Provision Stripe Products/Prices/WebhookEndpoint now? (Needs STRIPE_RESTRI
 If yes:
 ```bash
 python3 .claude/skills/stripe-payments/scripts/provision_stripe.py \
-  --config /tmp/paywire-config.json
+  --config .claude/paywire-config.json
 ```
 
 Outputs `.env.stripe` with created IDs.
@@ -190,6 +190,31 @@ Do NOT load these files by default — they are large. Load only when relevant:
   wires everything. Tests override providers without touching business code.
 
 ---
+
+## Event coverage
+
+Events are defined in `config/default-events.yaml` with a `has_template` flag:
+
+**`has_template: true` — dedicated, SOLID handler generated:**
+- `checkout.session.completed` — provision access after checkout
+- `invoice.paid` — activate or renew subscription
+- `invoice.payment_failed` — begin dunning / grace period
+- `customer.subscription.deleted` — revoke access
+- `customer.subscription.updated` *(disabled by default)*
+- `customer.subscription.trial_will_end` *(disabled by default)*
+
+**`has_template: false` — generic stub generated, Claude Code fills logic:**
+- `customer.created`, `customer.deleted`, `customer.updated`
+- `charge.refunded`, `charge.dispute.created`
+- `payment_intent.succeeded`, `payment_intent.payment_failed`
+
+**Events not in `default-events.yaml`:** the dispatcher safely ignores them — logs a skip
+message and returns 200 to Stripe. No failures. Users can always add a handler manually
+following the OCP pattern (new class implementing `StripeEventHandler` + register it).
+
+When the user enables an event with `has_template: false`, generate a `generic_handler.py`
+from `templates/fastapi/handlers/generic_handler.py.j2` and fill its LLM_SECTION
+based on the user's description of what that event should do in their app.
 
 ## Scope limits
 

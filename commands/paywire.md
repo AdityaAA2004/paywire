@@ -37,7 +37,7 @@ Show them the contents of `.claude/skills/stripe-payments/config/default-events.
 
 ## Step 3 — Build config JSON
 
-Write a temporary config file at `/tmp/paywire-config.json` combining:
+Write the config file at `.claude/paywire-config.json` (project-scoped, not /tmp) combining:
 - The detected framework
 - All answers from Step 2
 - Events from `config/default-events.yaml` with `enabled: true` for selected events
@@ -48,7 +48,7 @@ Write a temporary config file at `/tmp/paywire-config.json` combining:
 ```bash
 python3 .claude/skills/stripe-payments/scripts/scaffold.py \
   --framework <detected_framework> \
-  --config /tmp/paywire-config.json \
+  --config .claude/paywire-config.json \
   --out ./billing
 ```
 
@@ -73,7 +73,7 @@ Ask: "Do you want to provision Stripe Products, Prices, and a webhook endpoint n
 If yes:
 ```bash
 python3 .claude/skills/stripe-payments/scripts/provision_stripe.py \
-  --config /tmp/paywire-config.json
+  --config .claude/paywire-config.json
 ```
 
 ## Step 7 — Verify

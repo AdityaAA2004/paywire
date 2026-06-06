@@ -8,7 +8,7 @@ Modes:
 
 Usage:
   python3 scaffold.py --detect
-  python3 scaffold.py --framework fastapi --config /tmp/paywire-config.json --out ./billing
+  python3 scaffold.py --framework fastapi --config .claude/paywire-config.json --out ./billing
 """
 
 from __future__ import annotations
@@ -21,11 +21,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 
 SKILL_DIR = Path(__file__).parent.parent
 TEMPLATES_DIR = SKILL_DIR / "templates"
+DEFAULT_EVENTS_PATH = SKILL_DIR / "config" / "default-events.yaml"
 
 SUPPORTED_FRAMEWORKS = ["fastapi", "django", "nextjs"]
 
@@ -78,13 +80,41 @@ def load_config(config_path: str) -> dict:
         return json.load(f)
 
 
+def _load_default_event_schema() -> dict[str, dict]:
+    """Load default-events.yaml and return a lookup keyed by event name.
+
+    This provides the full event schema (handler_class, resource_retrieve, etc.)
+    so that a config only needs to specify {name, enabled} — scaffold enriches the rest.
+    """
+    if not DEFAULT_EVENTS_PATH.exists():
+        return {}
+    with open(DEFAULT_EVENTS_PATH) as f:
+        data = yaml.safe_load(f)
+    return {e["name"]: e for e in data.get("events", [])}
+
+
 def build_context(config: dict) -> dict:
-    """Build the Jinja2 template rendering context from user config."""
-    selected_events = [
-        e for e in config.get("events", []) if e.get("enabled", False)
-    ]
+    """Build the Jinja2 template rendering context from user config.
+
+    Events in config may be minimal ({name, enabled}) — this function merges the
+    full schema from default-events.yaml so templates always have handler_class,
+    resource_retrieve, resource, has_template, etc.
+    """
+    default_schema = _load_default_event_schema()
+
+    # Merge: default schema fields are the base; config fields override them.
+    merged_events = []
+    for ev in config.get("events", []):
+        base = dict(default_schema.get(ev["name"], {}))
+        base.update(ev)  # config fields win (e.g. user toggled enabled)
+        merged_events.append(base)
+
+    selected_events = [e for e in merged_events if e.get("enabled", False)]
     selected_event_names = {e["name"] for e in selected_events}
     handler_modules = sorted({e["handler_module"] for e in selected_events})
+
+    generic_handlers = [e for e in selected_events if not e.get("has_template", True)]
+    templated_handlers = [e for e in selected_events if e.get("has_template", True)]
 
     return {
         "app_name": config.get("app_name", "myapp"),
@@ -96,6 +126,8 @@ def build_context(config: dict) -> dict:
         "selected_events": selected_events,
         "selected_event_names": selected_event_names,
         "handler_modules": handler_modules,
+        "generic_handlers": generic_handlers,
+        "templated_handlers": templated_handlers,
         "stripe_api_version": config.get("stripe_api_version", "2026-04-22.dahlia"),
         "port": config.get("port", 8000),
         "generation_date": date.today().isoformat(),

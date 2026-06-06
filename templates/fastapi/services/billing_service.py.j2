@@ -34,6 +34,9 @@ class StripeSubscriptionProtocol(Protocol):
     async def retrieve_subscription(self, subscription_id: str) -> dict: ...
     async def retrieve_invoice(self, invoice_id: str) -> dict: ...
     async def retrieve_customer(self, customer_id: str) -> dict: ...
+    async def retrieve_charge(self, charge_id: str) -> dict: ...
+    async def retrieve_dispute(self, dispute_id: str) -> dict: ...
+    async def retrieve_payment_intent(self, payment_intent_id: str) -> dict: ...
 
 
 # --- Concrete implementation ---
@@ -90,3 +93,12 @@ class BillingService:
 
     async def retrieve_customer(self, customer_id: str) -> dict:
         return self._client.customers.retrieve(customer_id)
+
+    async def retrieve_charge(self, charge_id: str) -> dict:
+        return self._client.charges.retrieve(charge_id)
+
+    async def retrieve_dispute(self, dispute_id: str) -> dict:
+        return self._client.disputes.retrieve(dispute_id)
+
+    async def retrieve_payment_intent(self, payment_intent_id: str) -> dict:
+        return self._client.payment_intents.retrieve(payment_intent_id)

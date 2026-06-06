@@ -1,9 +1,18 @@
 # Stripe webhook event → handler matrix.
-# Set enabled: true for events your app needs to act on.
-# These map to generated handler classes in billing/handlers/.
+#
+# has_template: true  → paywire generates a dedicated, SOLID handler class for this event.
+# has_template: false → paywire generates a generic stub; Claude Code fills the logic.
+#
+# Set enabled: true for every event your app needs to react to.
+# Events with enabled: false are registered in the Stripe endpoint but silently skipped
+# by the dispatcher at runtime (safe — returns 200, logs a skip message).
+
+# ── Subscription lifecycle (full templates) ────────────────────────────────────
+
 events:
   - name: checkout.session.completed
     enabled: true
+    has_template: true
     handler_class: CheckoutCompletedHandler
     handler_module: checkout_handler
     description: "Customer completed a checkout session. Provision access or create subscription record."
@@ -12,6 +21,7 @@ events:
 
   - name: invoice.paid
     enabled: true
+    has_template: true
     handler_class: InvoicePaidHandler
     handler_module: invoice_handler
     description: "Subscription invoice paid (initial or renewal). Extend or activate access."
@@ -20,6 +30,7 @@ events:
 
   - name: invoice.payment_failed
     enabled: true
+    has_template: true
     handler_class: InvoicePaymentFailedHandler
     handler_module: invoice_handler
     description: "Subscription payment failed. Begin dunning / grace period logic."
@@ -28,6 +39,7 @@ events:
 
   - name: customer.subscription.deleted
     enabled: true
+    has_template: true
     handler_class: SubscriptionDeletedHandler
     handler_module: subscription_handler
     description: "Subscription cancelled or expired. Revoke access."
@@ -36,6 +48,7 @@ events:
 
   - name: customer.subscription.updated
     enabled: false
+    has_template: true
     handler_class: SubscriptionUpdatedHandler
     handler_module: subscription_handler
     description: "Plan or quantity changed. Update entitlements."
@@ -44,8 +57,92 @@ events:
 
   - name: customer.subscription.trial_will_end
     enabled: false
+    has_template: true
     handler_class: TrialWillEndHandler
     handler_module: subscription_handler
     description: "Trial ending in 3 days. Send conversion nudge."
     resource: Subscription
     resource_retrieve: "stripe.Subscription.retrieve"
+
+# ── Customer lifecycle (generic handler — no dedicated template) ───────────────
+
+  - name: customer.created
+    enabled: false
+    has_template: false
+    handler_class: CustomerCreatedHandler
+    handler_module: customer_handler
+    description: >
+      A Stripe Customer object was created. Usually you don't need this — you create
+      customers proactively via API and already have their ID. Enable only if you need
+      to react to customers created outside your app (e.g. via Stripe Dashboard).
+    resource: Customer
+    resource_retrieve: "stripe.Customer.retrieve"
+
+  - name: customer.deleted
+    enabled: false
+    has_template: false
+    handler_class: CustomerDeletedHandler
+    handler_module: customer_handler
+    description: >
+      A Stripe Customer was deleted. Enable to clean up local StripeCustomer records.
+      Note: Stripe recommends archiving customers rather than hard-deleting them.
+    resource: Customer
+    resource_retrieve: null   # Deleted customers can't be retrieved — use event payload data.
+
+  - name: customer.updated
+    enabled: false
+    has_template: false
+    handler_class: CustomerUpdatedHandler
+    handler_module: customer_handler
+    description: "Customer metadata, email, or default payment method changed."
+    resource: Customer
+    resource_retrieve: "stripe.Customer.retrieve"
+
+# ── Charge / refunds (generic handler — no dedicated template) ─────────────────
+
+  - name: charge.refunded
+    enabled: false
+    has_template: false
+    handler_class: ChargeRefundedHandler
+    handler_module: charge_handler
+    description: >
+      A charge was refunded. Enable to update order records, issue credits, or notify the user.
+      Highly app-specific — paywire generates a stub for you to fill.
+    resource: Charge
+    resource_retrieve: "stripe.Charge.retrieve"
+
+  - name: charge.dispute.created
+    enabled: false
+    has_template: false
+    handler_class: DisputeCreatedHandler
+    handler_module: charge_handler
+    description: >
+      A dispute (chargeback) was opened. Enable to flag the account, notify your team,
+      and gather evidence. Time-sensitive — Stripe gives you 7–21 days to respond.
+    resource: Dispute
+    resource_retrieve: "stripe.Dispute.retrieve"
+
+# ── Payment intents (generic handler — relevant for one-time payment mode) ─────
+
+  - name: payment_intent.succeeded
+    enabled: false
+    has_template: false
+    handler_class: PaymentIntentSucceededHandler
+    handler_module: payment_intent_handler
+    description: >
+      A payment intent succeeded. Relevant if you use PaymentIntent directly (one-time
+      payment mode) rather than Stripe Checkout. Not needed for subscription flows —
+      use invoice.paid instead.
+    resource: PaymentIntent
+    resource_retrieve: "stripe.PaymentIntent.retrieve"
+
+  - name: payment_intent.payment_failed
+    enabled: false
+    has_template: false
+    handler_class: PaymentIntentFailedHandler
+    handler_module: payment_intent_handler
+    description: >
+      A payment intent failed. Use for one-time payment error handling.
+      For subscription failures, use invoice.payment_failed instead.
+    resource: PaymentIntent
+    resource_retrieve: "stripe.PaymentIntent.retrieve"

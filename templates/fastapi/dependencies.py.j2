@@ -13,6 +13,7 @@ from functools import lru_cache
 import stripe
 from fastapi import Depends
 
+from database import get_db  # noqa: F401 — re-exported so webhook.py and tests can import from one place
 from .services.billing_service import BillingService, StripeCheckoutProtocol, StripeSubscriptionProtocol
 from .services.subscription_service import SubscriptionService
 from .handlers.checkout_handler import CheckoutCompletedHandler
