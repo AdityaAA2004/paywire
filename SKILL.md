@@ -39,6 +39,22 @@ python3 .claude/skills/stripe-payments/scripts/scaffold.py --detect
 Prints: `fastapi` | `django` | `nextjs` | `unknown`
 If unknown, ask the user which framework to target.
 
+### Step 1b — Verify dependencies
+
+Run this **before** rendering any templates:
+
+```bash
+python3 .claude/skills/stripe-payments/scripts/check_deps.py
+```
+
+Checks for: `stripe` (SDK), `sqlalchemy` (billing models), `alembic` (migrations).
+
+- **Exit 0, all ✓** → continue.
+- **Exit 1, some ✗** → ask the user whether to auto-install (`--install`) or fix manually.
+  - Auto-install: re-run with `--install`; it pip-installs missing packages and appends them to `requirements.txt`.
+  - Manual: print the exact `pip install` commands from the report and **stop** — do not proceed to template rendering until re-running the check passes.
+- **`stripe` in dep file but not importable** → suggest `pip install -r requirements.txt` (fresh venv case) rather than re-installing individual packages.
+
 ### Step 2 — Parse natural language (if /paywire was called with arguments)
 
 ```bash

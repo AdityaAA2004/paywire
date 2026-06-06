@@ -21,6 +21,24 @@ python3 .claude/skills/stripe-payments/scripts/scaffold.py --detect
 
 If the output is `unknown`, ask the user which framework their app uses (fastapi / django / nextjs).
 
+## Step 1b — Verify dependencies
+
+Run the dependency pre-flight check **before any templates are rendered**:
+
+```bash
+python3 .claude/skills/stripe-payments/scripts/check_deps.py
+```
+
+Read the output. Three outcomes:
+
+| Outcome | What to do |
+|---------|-----------|
+| All ✓ (exits 0) | Proceed to Step 2. |
+| Some ✗, user wants auto-install | Re-run with `--install` flag and confirm each package before proceeding. |
+| Some ✗, user prefers to install manually | Show the exact `pip install` commands from the report. **Stop here** — do not render templates until the user re-runs `/paywire` and this step passes. |
+
+If `stripe` is already declared in a requirements file but not importable (common in fresh venvs), suggest `pip install -r requirements.txt` rather than installing packages one by one.
+
 ## Step 2 — Gather business decisions
 
 Ask ONLY the questions that were not pre-filled by Step 0. Present them all at once, not one at a time.
